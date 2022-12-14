@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import netifaces
+import platform
+import subprocess
+import time
+import websocket
+from netifaces import AF_LINK, AF_INET, AF_INET6
+
+
+def linux_shutdown():
+    subprocess.Popen(['/usr/sbin/shutdown', 'now'])
+
+def linux_sleep():
+    subprocess.Popen(['/usr/bin/systemctl', 'suspend'])
+
+def mac_shutdown():
+    subprocess.Popen(['osascript', '-e', "'tell", 'app', '"System', 'Events"', 'to', 'shut', "down'"])
+
+def mac_sleep():
+    subprocess.Popen(['/usr/bin/pmset', 'sleepnow'])
+
+def windows_shutdown():
+    subprocess.Popen(['C:\Windows\System32\shutdown.exe', '/s', '/t', '0', '/f'])
+
+def windows_sleep():
+    subprocess.Popen(['C:\Windows\System32\rundll32.exe', 'powrprof.dll,SetSuspendState', '0,1,0'])
+
+def computer_sleep():
+    if sleep_command is not None:
+        subprocess.Popen(sleep_command.split(' '))
+    elif platform.system() == "Linux":
+        linux_sleep()
+    elif platform.system() == "Darwin":
+        mac_sleep()
+    elif platform.system() == "Windows":
+        windows_sleep()
+
+def computer_shutdown():
+    if shutdown_command is not None:
+        subprocess.Popen(shutdown_command.split(' '))
+    elif platform.system() == "Linux":
+        linux_shutdown()
+    elif platform.system() == "Darwin":
+        mac_shutdown()
+    elif platform.system() == "Windows":
+        windows_shutdown()
+
+def get_interface_data():
+    ifaces = netifaces.interfaces()
+    iface_data = {}
+    for iface in ifaces:
+        net_iface = netifaces.ifaddresses(iface)
+        if netifaces.AF_LINK not in net_iface.keys():
+            continue
+        if AF_INET not in net_iface.keys():
+            continue
+        if AF_INET6 not in net_iface.keys():
+            continue
+        if net_iface[netifaces.AF_LINK][0]['addr'] == '00:00:00:00:00:00':
+            continue
+        iface_data[iface] = {
+                'ipv4': net_iface[AF_INET][0]['addr'],
+                'mac':  net_iface[AF_LINK][0]['addr'],
+                'ipv6': net_iface[AF_INET6][0]['addr'].partition('%')[0],
+            }
+    return iface_data
+
+def get_interface_match(mac):
+    interfaces = get_interface_data()
+    iface_data = {}
+    for interface in interfaces.keys():
+        if interfaces[interface]['mac'] == mac:
+            iface_data[interface] = interfaces[interface]
+            return iface_data
+
+def send_interfaces(ws):
+    interfaces = json.dumps(get_interface_data())
+    if verbosity > 0:
+        print(interfaces)
+    ws.send(interfaces)
+
+def on_message(ws, message):
+    mess = json.loads(message)
+    if mess['value'] != 'pong':
+            if sleep_off_flag is not True:
+                if verbosity > 0:
+                    print('Recieved sleep command')
+                computer_sleep()
+            else:
+                if verbosity > 0:
+                    print('Recieved shutdown command')
+                computer_shutdown()
+    else:
+        if verbosity > 0:
+            print(f"MESSAGE: {message}")
+        time.sleep(15)
+        send_interfaces(ws)
+
+def on_open(ws):
+    print(f"AMAZON ID: {amzid}")
+    print(f"LICENSE: {license}")
+    if verbosity > 0:
+        print('CONNECTED')
+    send_interfaces(ws)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Python port of WOLSkill Command Line tool')
+    parser.add_argument('--amzid', help="The Amazon ID given to you when you purchased the license", required=True)
+    parser.add_argument('--license', help="The license key given to you when purchased", required=True)
+    parser.add_argument('--sleep-off', action='store_true', help="Put the computer to sleep instead of shutting down", required=False)
+    parser.add_argument('--sleep-command', help="If the built in sleep command is not working you can override it here", required=False, default=None)
+    parser.add_argument('--shutdown-command', help="If the built in shutdown command is not working you can override it here", required=False, default=None)
+    parser.add_argument('--verbosity', choices=['0','1','2'], default='1', required=False)
+    args = vars(parser.parse_args())
+
+    verbosity = int(args['verbosity'])
+    sleep_off_flag = args['sleep_off']
+    sleep_command = args['sleep_command']
+    shutdown_command = args['shutdown_command']
+
+    url = 'wss://3rbp1kul8g.execute-api.eu-west-1.amazonaws.com/prod'
+    amzid = args['amzid']
+    license = args['license']
+    wsurl = f"{url}?awsid={amzid}&license={license}"
+    
+    wsapp = websocket.WebSocketApp(wsurl, on_open=on_open, on_message=on_message)
+    wsapp.run_forever() 
