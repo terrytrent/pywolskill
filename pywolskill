@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import logging
 import netifaces
 import platform
 import subprocess
@@ -67,52 +68,55 @@ def get_interface_data():
             }
     return iface_data
 
-def get_interface_match(mac):
+def interface_matches(mac):
     interfaces = get_interface_data()
-    iface_data = {}
     for interface in interfaces.keys():
         if interfaces[interface]['mac'] == mac:
-            iface_data[interface] = interfaces[interface]
-            return iface_data
+            return True
 
 def send_interfaces(ws):
     interfaces = json.dumps(get_interface_data())
     if verbosity > 0:
-        print(interfaces)
+        logging.info(interfaces)
     ws.send(interfaces)
 
 def on_message(ws, message):
     mess = json.loads(message)
-    if mess['value'] != 'pong':
+    message_value = mess['value']
+    if message_value != 'pong':
+        message_value = message_value.replace('-',':').lower()
+        if interface_matches(message_value):
             if shutdown_flag is not True:
                 if verbosity > 0:
-                    print('Recieved sleep command')
+                    logging.info('Recieved sleep command')
                 computer_sleep()
             else:
                 if verbosity > 0:
-                    print('Recieved shutdown command')
+                    logging.info('Recieved shutdown command')
                 computer_shutdown()
     else:
         if verbosity > 0:
-            print(f"MESSAGE: {message}")
-        time.sleep(15)
+            logging.info(f"MESSAGE: {message}")
+        time.sleep(30)
         send_interfaces(ws)
 
 def on_open(ws):
-    print(f"AMAZON ID: {amzid}")
-    print(f"LICENSE: {license}")
+    logging.info(f"AMAZON ID: {amzid}")
+    logging.info(f"LICENSE: {license}")
     if verbosity > 0:
-        print('CONNECTED')
+        logging.info('CONNECTED')
     send_interfaces(ws)
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
+
     parser = argparse.ArgumentParser(description='Python port of WOLSkill Command Line tool')
     parser.add_argument('--amzid', help="The Amazon ID given to you when you purchased the license", required=True)
     parser.add_argument('--license', help="The license key given to you when purchased", required=True)
     parser.add_argument('--shutdown', action='store_true', help="Shutdown computer instead of putting to sleep", required=False)
     parser.add_argument('--sleep-command', help="If the built in sleep command is not working you can override it here", required=False, default=None)
     parser.add_argument('--shutdown-command', help="If the built in shutdown command is not working you can override it here", required=False, default=None)
-    parser.add_argument('--verbosity', choices=['0','1','2'], default='1', required=False)
+    parser.add_argument('--verbosity', choices=['0','1'], default='1', required=False)
     args = vars(parser.parse_args())
 
     verbosity = int(args['verbosity'])
